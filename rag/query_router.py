@@ -27,6 +27,7 @@ class QueryRouter:
     def get_most_relevant_index(self, query: str, top_k: int = 1) -> List[str]:
         """
         Determine the most relevant index(es) for a given query.
+        Uses all-mpnet-base-v2's strong semantic understanding.
         
         Args:
             query: The user query
@@ -40,13 +41,19 @@ class QueryRouter:
             return list(self.vector_db_manager.collections.keys())
         
         try:
+            # Process the query to enhance performance with all-mpnet-base-v2
+            # This model works well with detailed queries
+            enhanced_query = f"Find information about: {query}"
+            
             # Get query embedding
-            query_embedding = self.embedding_function.embed_query(query)
+            query_embedding = self.embedding_function.embed_query(enhanced_query)
             
             # Calculate similarity with each index description
             similarities = {}
             for index_name, description in self.vector_db_manager.index_descriptions.items():
-                description_embedding = self.embedding_function.embed_query(description)
+                # Enhance description as well for better matching
+                enhanced_description = f"This index contains: {description}"
+                description_embedding = self.embedding_function.embed_query(enhanced_description)
                 similarity = self._calculate_cosine_similarity(query_embedding, description_embedding)
                 similarities[index_name] = similarity
             
@@ -55,6 +62,10 @@ class QueryRouter:
             
             # Get top-k indexes
             top_indexes = [index_name for index_name, _ in sorted_indexes[:top_k]]
+            
+            # Print similarity scores for debugging
+            for index_name, score in sorted_indexes:
+                logger.debug(f"Index '{index_name}' similarity score: {score:.4f}")
             
             logger.info(f"Query routed to index(es): {', '.join(top_indexes)}")
             return top_indexes

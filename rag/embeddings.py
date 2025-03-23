@@ -18,10 +18,30 @@ def get_embedding_function(model_name=DEFAULT_EMBEDDING_MODEL):
         Embedding function
     """
     try:
-        # Update import to use the dedicated package
         from langchain_huggingface import HuggingFaceEmbeddings
         
-        embeddings = HuggingFaceEmbeddings(model_name=model_name)
+        # Check if we're using the all-mpnet-base-v2 model
+        if "all-mpnet-base-v2" in model_name:
+            # Optimized settings for all-mpnet-base-v2
+            model_kwargs = {
+                'device': 'cpu'  # Change to 'cuda' if you have a GPU
+            }
+            encode_kwargs = {
+                'normalize_embeddings': True,  # Important for cosine similarity
+                'batch_size': 16  # Adjust based on your available RAM
+                # Removed 'show_progress_bar': True - this is what caused the conflict
+            }
+            
+            embeddings = HuggingFaceEmbeddings(
+                model_name=model_name,
+                model_kwargs=model_kwargs,
+                encode_kwargs=encode_kwargs,
+                cache_folder="./model_cache"  # Cache the model locally
+            )
+        else:
+            # Default settings for other models
+            embeddings = HuggingFaceEmbeddings(model_name=model_name)
+        
         logger.info(f"Embedding function using {model_name} created successfully.")
         return embeddings
     except Exception as e:

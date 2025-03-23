@@ -6,6 +6,8 @@ Main entry point for the application.
 
 import argparse
 import sys
+import subprocess
+import os
 
 # Set up logging first
 from utils.logging import setup_logging
@@ -23,8 +25,6 @@ from rag.reranker import SemanticReranker
 from rag.retriever import RAGRetriever
 from rag.chain import RAGChain
 from interfaces.chatbot import RAGChatbot
-from interfaces.cli import run_cli
-from interfaces.web import create_web_interface
 
 def setup_rag_chatbot(
     domain1_data_dir: str,
@@ -101,6 +101,29 @@ def setup_rag_chatbot(
     
     return chatbot
 
+def run_streamlit_directly():
+    """Run Streamlit directly without importing the module"""
+    # Set critical environment variables
+    os.environ["STREAMLIT_SERVER_WATCH_DIRS"] = "false"
+    os.environ["STREAMLIT_SERVER_FILE_WATCHER_TYPE"] = "none"
+    
+    streamlit_script = os.path.join("interfaces", "streamlit_app.py")
+    
+    print("\n" + "="*80)
+    print("Starting Streamlit server...")
+    print("If the browser doesn't open automatically, manually go to: http://localhost:8501")
+    print("="*80 + "\n")
+    
+    # Simple command with minimal options
+    cmd = [
+        sys.executable, "-m", "streamlit", "run", 
+        streamlit_script,
+        "--server.port=8501"
+    ]
+    
+    subprocess.run(cmd)
+    return
+
 def main():
     """Main function to parse arguments and run the appropriate interface."""
     parser = argparse.ArgumentParser(description="RAG Chatbot with Semantic Chunking, Reranking, and Query Routing")
@@ -115,10 +138,9 @@ def main():
     
     args = parser.parse_args()
     
-    # Launch Streamlit if requested
+    # Launch Streamlit if requested - Use direct method instead of importing
     if args.streamlit:
-        from interfaces.run_streamlit import run_streamlit
-        run_streamlit()
+        run_streamlit_directly()
         return
     
     # Setup chatbot for CLI or web interface
@@ -133,8 +155,10 @@ def main():
     
     # Run interface
     if args.web:
+        from interfaces.web import create_web_interface
         create_web_interface(chatbot)
     else:
+        from interfaces.cli import run_cli
         run_cli(chatbot)
 
 if __name__ == "__main__":

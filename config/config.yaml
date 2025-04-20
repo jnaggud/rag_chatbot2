@@ -1,0 +1,30 @@
+# config/config.yaml
+
+persist_directory: "./chroma_db"
+descriptions_file: "./index_descriptions.json"
+
+chunking:
+  chunk_size: 512
+  chunk_overlap: 128
+  breakpoint_threshold_amount: 0.15
+  breakpoint_threshold_type: "percentile"
+
+retrieval:
+  coarse_top_k: 10
+  rerank_top_k: 5
+
+embedding_model: "nomic-ai/nomic-embed-text-v2-moe"
+
+llm:
+  default_model: "llama3"
+  available_models:
+    - llama3
+    - nemotron
+    - guanaco
+    - vicuna
+
+logging:
+  level: "INFO"
+
+environment:
+  tokenizers_parallelism: false

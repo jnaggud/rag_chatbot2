@@ -1,30 +1,65 @@
 # rag/retriever.py
 
 import logging
-from langchain_core.documents import Document
+from config.settings import COARSE_TOP_K
+from typing import List, Dict, Any
 
 logger = logging.getLogger(__name__)
 
 class RAGRetriever:
-    def __init__(self, vector_db_mgr, router, reranker,
-                 coarse_top_k: int = 10, rerank_top_k: int = 5):
-        self.vdb = vector_db_mgr
+    """
+    Document retriever for RAG:
+      1) Routes a query to one or more domains/collections
+      2) Does a first-pass (coarse) retrieval from Chroma
+      3) Reranks those results semantically
+    """
+
+    def __init__(
+        self,
+        vector_db,         # VectorDatabaseManager
+        router,            # QueryRouter
+        reranker,          # SemanticReranker
+        coarse_k: int = COARSE_TOP_K
+    ):
+        """
+        Args:
+            vector_db: your Chroma-backed vector store manager
+            router:    your QueryRouter (figures out which collections to hit)
+            reranker:  your SemanticReranker (rescores top docs)
+            coarse_k:  how many initial hits to fetch per domain
+        """
+        self.vdb = vector_db
         self.router = router
         self.reranker = reranker
-        self.coarse_top_k = coarse_top_k
-        self.rerank_top_k = rerank_top_k
-        logger.info(f"Retriever initialized (coarse_k={coarse_top_k}, rerank_k={rerank_top_k})")
+        self.coarse_k = coarse_k
+        logger.info(f"RAG Retriever initialized with coarse_k={self.coarse_k}")
 
-    def retrieve(self, query: str) -> list[Document]:
-        # 1) Route to index
-        idxs = self.router.get_most_relevant_index(query, top_k=1)
-        col = self.vdb.get_index(idxs[0])
+    def retrieve(self, query: str) -> List[Dict[str, Any]]:
+        """
+        Given a user query, return a list of document dicts,
+        sorted by semantic relevance after reranking.
+        Each dict must have at least 'page_content' (string) and any metadata.
+        """
+        # 1) decide which domains to search
+        domains = self.router.route(query)
+        logger.debug(f"Routing query '{query}' to domains: {domains}")
 
-        # 2) Coarse retrieval
-        coarse = col.similarity_search(query, k=self.coarse_top_k)
-        logger.info(f"Coarse retrieved {len(coarse)} docs.")
+        # 2) gather coarse results
+        all_hits = []
+        for domain in domains:
+            hits = self.vdb.query(
+                name=domain,
+                query=query,
+                k=self.coarse_k
+            )
+            logger.debug(f"Fetched {len(hits)} hits from domain '{domain}'")
+            all_hits.extend(hits)
 
-        # 3) Fine semantic rerank
-        reranked = self.reranker.rerank(query, coarse)[:self.rerank_top_k]
-        logger.info(f"Returning top {len(reranked)} reranked docs.")
+        if not all_hits:
+            logger.warning(f"No hits found for query '{query}'")
+            return []
+
+        # 3) rerank globally
+        reranked = self.reranker.rerank(query, all_hits)
+        logger.debug(f"Reranked to {len(reranked)} docs")
         return reranked

@@ -25,25 +25,14 @@ from rag.retriever import RAGRetriever
 from rag.chain import RAGChain
 from interfaces.chatbot import RAGChatbot
 
-from config.settings import (
-    DEFAULT_PERSIST_DIRECTORY,
-    DEFAULT_DESCRIPTIONS_FILE,
-)
 from config.settings import DEFAULT_PERSIST_DIRECTORY, DEFAULT_DESCRIPTIONS_FILE
-
-
-
 
 logger = setup_logging()
 
-st.set_page_config(
-    page_title="🔗 RAG Chatbot",
-    layout="wide",
-)
+st.set_page_config(page_title="🔗 RAG Chatbot", layout="wide")
 
 
 def is_ollama_running() -> bool:
-    # same logic as before...
     try:
         import requests
         r = requests.get("http://localhost:11434/api/version", timeout=2)
@@ -54,13 +43,16 @@ def is_ollama_running() -> bool:
         return bool(res.stdout.strip())
 
 
-def init_rag():
-    """One‐time setup: embeddings, chunking, vector store, LLM chain."""
+def init_rag(force_rebuild: bool):
+    """
+    Set up embeddings, vector store, chunking, and the RAG chain.
+    If force_rebuild is False and indexes already exist, we skip chunking/indexing.
+    """
     if not is_ollama_running():
         st.sidebar.error("❌ Ollama isn’t running. Run `ollama serve` first.")
         return False
 
-    # read inputs from session_state
+    # Read sidebar inputs
     d1_dir  = st.session_state.domain1_dir
     d2_dir  = st.session_state.domain2_dir
     d1_desc = st.session_state.domain1_desc
@@ -73,40 +65,57 @@ def init_rag():
     info     = st.sidebar.empty()
 
     try:
-        info.text("1/5 Installing deps")
+        # 1. Dependencies
+        info.text("1/6 Installing dependencies")
         progress.progress(10)
         check_and_install_dependencies()
 
-        info.text("2/5 Checking Ollama")
+        # 2. Ollama
+        info.text("2/6 Checking Ollama")
         progress.progress(25)
         check_and_install_ollama()
 
-        info.text(f"3/5 Pulling LLM: {model}")
+        # 3. Pull model
+        info.text(f"3/6 Pulling LLM: {model}")
         progress.progress(40)
         pull_ollama_model(model)
 
-        info.text("4/5 Building embeddings & indexes")
-        progress.progress(55)
+        # 4. Embeddings + Chunker + VectorStore
+        info.text("4/6 Building embedding function")
+        progress.progress(50)
         embed_fn = get_embedding_function()
-        chunker  = SemanticChunkingProcessor(embed_fn)
 
-        # ← pass descriptions_file here
-        vdb      = VectorDatabaseManager(embed_fn, persist, desc_f)
-        vdb.create_index("domain1", d1_desc)
-        vdb.create_index("domain2", d2_desc)
+        chunker = SemanticChunkingProcessor()
+        vdb     = VectorDatabaseManager(embed_fn, persist, desc_f)
 
-        info.text("5/5 Chunking & indexing docs")
-        progress.progress(70)
-        docs1 = load_documents(d1_dir)
-        if docs1:
-            chunks1 = chunker.chunk_documents(docs1)
-            vdb.add_documents_to_index("domain1", chunks1)
+        # ---- FIXED: simply get a set of existing names ----
+        existing_cols = set(vdb.client.list_collections())
 
-        docs2 = load_documents(d2_dir)
-        if docs2:
-            chunks2 = chunker.chunk_documents(docs2)
-            vdb.add_documents_to_index("domain2", chunks2)
+        needs_rebuild = force_rebuild or not ({"domain1", "domain2"} <= existing_cols)
 
+        if needs_rebuild:
+            info.text("5/6 (Re)creating indexes & descriptions")
+            progress.progress(60)
+            vdb.create_index("domain1", d1_desc)
+            vdb.create_index("domain2", d2_desc)
+
+            info.text("6/6 Chunking & indexing documents")
+            progress.progress(70)
+
+            docs1 = load_documents(d1_dir)
+            if docs1:
+                chunks1 = chunker.chunk_documents(docs1)
+                vdb.add_documents_to_index("domain1", chunks1)
+
+            docs2 = load_documents(d2_dir)
+            if docs2:
+                chunks2 = chunker.chunk_documents(docs2)
+                vdb.add_documents_to_index("domain2", chunks2)
+        else:
+            info.text("✅ Using existing indexes (no rebuild)")
+            progress.progress(70)
+
+        # 5. Build the RAG chain
         info.text("Finalizing RAG chain")
         progress.progress(85)
         router    = QueryRouter(vdb, embed_fn)
@@ -115,7 +124,7 @@ def init_rag():
         chain     = RAGChain(retriever, model)
         chatbot   = RAGChatbot(chain)
 
-        # persist into session_state
+        # Persist into state
         st.session_state.chatbot        = chatbot
         st.session_state.setup_complete = True
 
@@ -156,7 +165,7 @@ def main():
             value=st.session_state.get("domain2_desc","Second domain of documents")
         )
 
-        # Chroma persistence & index descriptions file
+        # Persistence & descriptions
         st.session_state.persist_dir       = st.text_input(
             "Chroma persist directory",
             value=st.session_state.get("persist_dir", DEFAULT_PERSIST_DIRECTORY)
@@ -166,8 +175,8 @@ def main():
             value=st.session_state.get("descriptions_file", DEFAULT_DESCRIPTIONS_FILE)
         )
 
-        # Model dropdown
-        MODELS = ["llama3","nemotron"]
+        # Model selection
+        MODELS = ["llama3", "nemotron"]
         default = st.session_state.get("model_name","llama3")
         if default not in MODELS:
             MODELS.insert(0, default)
@@ -177,31 +186,40 @@ def main():
             index=MODELS.index(default),
         )
 
+        # Rebuild checkbox
+        st.session_state.force_rebuild = st.checkbox(
+            "Rebuild indexes & chunks on setup",
+            value=False
+        )
+
         st.markdown("---")
         if not st.session_state.get("setup_complete", False):
             if st.button("Setup RAG Chatbot"):
                 with st.spinner("Initializing…"):
-                    init_rag()
+                    init_rag(force_rebuild=st.session_state.force_rebuild)
         else:
-            if st.button("Re‑run setup"):
+            col1, col2 = st.columns(2)
+            if col1.button("Re‑run setup"):
                 st.session_state.setup_complete = False
                 st.experimental_rerun()
+            if col2.button("Force re‑index & chunk"):
+                init_rag(force_rebuild=True)
 
     # --- Main chat area ---
     if not st.session_state.get("setup_complete", False):
-        st.info("▶️ Click **Setup RAG Chatbot** to build your indexes first.")
+        st.info("▶️ Click **Setup RAG Chatbot** to build or load your indexes first.")
         return
 
     st.header("💬 Chat with your documents")
     if "messages" not in st.session_state:
         st.session_state.messages = []
 
-    # Show past
+    # Display chat history
     for msg in st.session_state.messages:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
 
-    # Input & response
+    # New question
     question = st.chat_input("Ask a question…")
     if question:
         st.session_state.messages.append({"role":"user","content":question})

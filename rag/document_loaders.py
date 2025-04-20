@@ -1,37 +1,27 @@
-"""
-Document loading functionality for the RAG chatbot.
-"""
+# rag/document_loaders.py
 
-import logging
-from typing import List
-from langchain_core.documents import Document
-from langchain_community.document_loaders import DirectoryLoader, PyPDFLoader
+import os
+import glob
+from langchain.document_loaders import PyPDFLoader
 
-logger = logging.getLogger(__name__)
-
-def load_documents(directory_path: str, glob_pattern: str = "**/*.pdf") -> List[Document]:
+def load_documents(directory: str):
     """
-    Load PDF documents from a directory with a specified glob pattern.
-    
-    Args:
-        directory_path: Path to the directory containing documents
-        glob_pattern: Pattern to match document files
-        
-    Returns:
-        List of Document objects
+    Recursively load all PDFs under `directory`, split them per page,
+    and tag each Document with its source filepath.
     """
-    logger.info(f"Loading PDF documents from {directory_path} with pattern {glob_pattern}...")
-    try:
-        loader = DirectoryLoader(
-            directory_path,
-            glob=glob_pattern,
-            loader_cls=PyPDFLoader,
-            show_progress=True,
-            use_multithreading=True
-        )
-        documents = loader.load()
-        logger.info(f"Loaded {len(documents)} PDF documents.")
-        return documents
-    except Exception as e:
-        logger.error(f"Error loading documents: {e}")
-        return []
+    documents = []
+    # Find every PDF in subfolders
+    pattern = os.path.join(directory, "**", "*.pdf")
+    for path in glob.glob(pattern, recursive=True):
+        # 1) Initialize loader with path only
+        loader = PyPDFLoader(path)
+        # 2) Split into page-level Documents
+        docs = loader.load_and_split()
+        # 3) Attach the source filename to metadata
+        for doc in docs:
+            # ensure there's a metadata dict
+            if not hasattr(doc, "metadata") or doc.metadata is None:
+                doc.metadata = {}
+            doc.metadata["source"] = path
+        documents.extend(docs)
+    return documents

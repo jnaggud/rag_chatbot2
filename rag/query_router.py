@@ -1,91 +1,53 @@
-"""
-Query routing implementation for the RAG chatbot.
-"""
+# rag/query_router.py
 
 import logging
 import numpy as np
-from typing import List
+from numpy.linalg import norm
+
+from config.settings import COARSE_TOP_K
 
 logger = logging.getLogger(__name__)
 
 class QueryRouter:
-    """Routes queries to the most relevant index based on semantic similarity."""
-    
-    def __init__(self, vector_db_manager, embedding_function):
+    """
+    Routes a user query to the most relevant domain index(es)
+    by comparing the query embedding to each domain’s description embedding.
+    """
+
+    def __init__(self, vector_db_manager, embedding_fn, top_k=None):
         """
-        Initialize the query router.
-        
         Args:
-            vector_db_manager: Vector database manager
-            embedding_function: Function to generate embeddings
+            vector_db_manager: VectorDatabaseManager instance, which knows your indexes
+            embedding_fn: an embedding function with `embed_query(text)` -> np.ndarray
+            top_k: how many top domains to return (defaults to COARSE_TOP_K)
         """
-        self.vector_db_manager = vector_db_manager
-        self.embedding_function = embedding_function
-        
-        logger.info("Query Router initialized.")
-    
-    def get_most_relevant_index(self, query: str, top_k: int = 1) -> List[str]:
+        self.vdb = vector_db_manager
+        self.embedding_fn = embedding_fn
+        self.top_k = top_k if top_k is not None else COARSE_TOP_K
+
+    def route(self, query: str):
         """
-        Determine the most relevant index(es) for a given query.
-        Uses all-mpnet-base-v2's strong semantic understanding.
-        
-        Args:
-            query: The user query
-            top_k: Number of top indexes to return
-            
-        Returns:
-            List of the top_k most relevant index names
+        Returns a list of index names sorted by relevance (highest cosine
+        similarity) between the query and each index’s description.
         """
-        if not self.vector_db_manager.index_descriptions:
-            logger.error("No index descriptions available for routing.")
-            return list(self.vector_db_manager.collections.keys())
-        
-        try:
-            # Process the query to enhance performance with all-mpnet-base-v2
-            # This model works well with detailed queries
-            enhanced_query = f"Find information about: {query}"
-            
-            # Get query embedding
-            query_embedding = self.embedding_function.embed_query(enhanced_query)
-            
-            # Calculate similarity with each index description
-            similarities = {}
-            for index_name, description in self.vector_db_manager.index_descriptions.items():
-                # Enhance description as well for better matching
-                enhanced_description = f"This index contains: {description}"
-                description_embedding = self.embedding_function.embed_query(enhanced_description)
-                similarity = self._calculate_cosine_similarity(query_embedding, description_embedding)
-                similarities[index_name] = similarity
-            
-            # Sort indexes by similarity
-            sorted_indexes = sorted(similarities.items(), key=lambda x: x[1], reverse=True)
-            
-            # Get top-k indexes
-            top_indexes = [index_name for index_name, _ in sorted_indexes[:top_k]]
-            
-            # Print similarity scores for debugging
-            for index_name, score in sorted_indexes:
-                logger.debug(f"Index '{index_name}' similarity score: {score:.4f}")
-            
-            logger.info(f"Query routed to index(es): {', '.join(top_indexes)}")
-            return top_indexes
-        except Exception as e:
-            logger.error(f"Error in query routing: {e}")
-            # Fallback to all indexes
-            return list(self.vector_db_manager.collections.keys())
-    
-    def _calculate_cosine_similarity(self, vec1, vec2) -> float:
-        """
-        Calculate cosine similarity between two vectors.
-        
-        Args:
-            vec1: First vector
-            vec2: Second vector
-            
-        Returns:
-            Cosine similarity value
-        """
-        dot_product = np.dot(vec1, vec2)
-        norm_vec1 = np.linalg.norm(vec1)
-        norm_vec2 = np.linalg.norm(vec2)
-        return dot_product / (norm_vec1 * norm_vec2)
+        # 1) Embed the user’s query
+        q_emb = self.embedding_fn.embed_query(query)
+
+        # 2) Load your index descriptions
+        #    Expect a dict: { "domain1": "Description text …", ... }
+        descriptions = self.vdb.get_index_descriptions()
+
+        scores = []
+        for name, desc in descriptions.items():
+            # embed each domain description
+            d_emb = self.embedding_fn.embed_query(desc)
+            # cosine similarity
+            sim = float(np.dot(q_emb, d_emb) / ((norm(q_emb) * norm(d_emb)) + 1e-10))
+            scores.append((name, sim))
+
+        # 3) sort by similarity descending, take top_k
+        scores.sort(key=lambda x: x[1], reverse=True)
+        top_domains = [name for name, _ in scores[: self.top_k]]
+
+        logger.info(f"Routed query “{query}” → {top_domains}")
+        return top_domains

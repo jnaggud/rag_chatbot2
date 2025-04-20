@@ -1,111 +1,113 @@
 # rag/vector_store.py
 
+import json
 import logging
-import os
-from typing import List
+from typing import List, Dict, Any
 
-from langchain_core.documents import Document
-from langchain_chroma import Chroma
+from chromadb import Client
+from chromadb.config import Settings
+from chromadb.utils import embedding_functions
 
-from utils.persistence import save_index_descriptions, load_index_descriptions
+from config.settings import PERSIST_DIRECTORY, DESCRIPTIONS_FILE
 
 logger = logging.getLogger(__name__)
 
 class VectorDatabaseManager:
+    """
+    Manages a Chroma-backed vector store with multiple named collections (domains),
+    plus a persisted JSON file of index descriptions.
+    """
+
     def __init__(
         self,
-        embedding_function,
-        persist_directory: str,
-        descriptions_file: str
+        embedding_function,                # Callable that maps text->vector
+        persist_directory: str = PERSIST_DIRECTORY,
+        descriptions_file: str = DESCRIPTIONS_FILE
     ):
-        """
-        Manage multiple Chroma collections with incremental indexing.
-
-        Args:
-            embedding_function: A LangChain embedding function
-            persist_directory: Base folder to store each collection
-            descriptions_file: JSON file to load/save index descriptions
-        """
-        self.embedding_function = embedding_function
+        # Where Chroma will persist its on-disk DB
         self.persist_directory = persist_directory
+        # Where we keep our human-written descriptions of each index
         self.descriptions_file = descriptions_file
 
-        os.makedirs(persist_directory, exist_ok=True)
+        # Load or initialize the descriptions JSON
+        try:
+            with open(self.descriptions_file, "r") as f:
+                self.index_descriptions = json.load(f)
+        except FileNotFoundError:
+            self.index_descriptions = {}
 
-        # Load previously‑saved index descriptions (if any)
-        self.index_descriptions = load_index_descriptions(descriptions_file)
-        self.collections = {}
-
-        logger.info(f"VectorDB Manager initialized at {persist_directory}")
-
-    def create_index(self, name: str, description: str = None):
-        """
-        Create a new Chroma collection (or open an existing one) for `name`.
-        """
-        # Fill in description if missing
-        if description is None:
-            description = self.index_descriptions.get(name, f"Index '{name}'")
-
-        # Ensure on‐disk folder exists
-        idx_dir = os.path.join(self.persist_directory, name)
-        os.makedirs(idx_dir, exist_ok=True)
-
-        # Initialize Chroma
-        col = Chroma(
-            collection_name=name,
-            embedding_function=self.embedding_function,
-            persist_directory=idx_dir,
+        # Build a Chroma client using the new v0.6+ API
+        settings = Settings(
+            persist_directory=self.persist_directory,
+            anonymized_telemetry=False
         )
-        self.collections[name] = col
+        # Wrap your embedding function so it has the signature Chroma expects
+        ef = embedding_functions.DefaultEmbeddingFunction(embedding_function)
+        self.client = Client(settings=settings, embedding_function=ef)
 
-        # Save description
+    def save_descriptions(self) -> None:
+        """Persist the index descriptions back to disk."""
+        with open(self.descriptions_file, "w") as f:
+            json.dump(self.index_descriptions, f, indent=2)
+
+    def create_index(self, name: str, description: str) -> None:
+        """
+        Create (or load) a named collection in Chroma and record its description.
+        """
+        # Update and save our descriptions file
         self.index_descriptions[name] = description
-        save_index_descriptions(self.index_descriptions, self.descriptions_file)
+        self.save_descriptions()
 
-        logger.info(f"Created index '{name}' with description: {description}")
+        # Chroma v0.6: list_collections() returns a list of names
+        existing = self.client.list_collections()
+        if name not in existing:
+            self.client.get_or_create_collection(name)
 
-    def add_documents_to_index(self, name: str, docs: List[Document]):
+    def add_documents_to_index(self, name: str, docs: List[Any]) -> None:
         """
-        Incrementally add new chunks to the named collection.
-
-        Each Document.metadata must contain a unique "chunk_id" string.
+        Add a batch of chunked documents to the 'name' collection.
+        Each doc must have:
+          - doc.page_content (str)
+          - doc.embedding     (list[float])
+          - doc.metadata      (dict), containing at least 'source' & 'chunk'
         """
-        if name not in self.collections:
-            logger.error(f"Index '{name}' not found; cannot add documents.")
-            return
+        col = self.client.get_collection(name)
 
-        col = self.collections[name]
-
-        # 1) Load all existing chunk_ids
-        existing_chunk_ids = set()
-        results = col.get(include=["metadatas"])
-        for meta in results.get("metadatas", []):
-            cid = meta.get("chunk_id")
-            if cid is not None:
-                existing_chunk_ids.add(cid)
-
-        # 2) Filter out docs we already have
-        texts_to_add = []
-        metas_to_add = []
+        ids, embeddings, documents, metadatas = [], [], [], []
         for doc in docs:
-            cid = doc.metadata.get("chunk_id")
-            if cid is None:
-                # Skip any chunk without an ID
-                continue
-            if cid in existing_chunk_ids:
-                # Already indexed
-                continue
-            texts_to_add.append(doc.page_content)
-            metas_to_add.append(doc.metadata)
+            # Build a unique ID per chunk
+            src   = doc.metadata.get("source", "")
+            chunk = doc.metadata.get("chunk", 0)
+            _id   = f"{src}-chunk-{chunk}"
+            ids.append(_id)
 
-        if not texts_to_add:
-            logger.info(f"No new chunks to index for '{name}'.")
-            return
+            embeddings.append(doc.embedding)
+            documents.append(doc.page_content)
+            metadatas.append(doc.metadata)
 
-        # 3) Add only the new ones
-        col.add_texts(texts=texts_to_add, metadatas=metas_to_add)
-        logger.info(f"Indexed {len(texts_to_add)} new chunks into '{name}'.")
+        col.add(
+            ids=ids,
+            embeddings=embeddings,
+            documents=documents,
+            metadatas=metadatas,
+        )
 
-    def get_index(self, name: str):
-        """Return the Chroma collection for `name` (or None)."""
-        return self.collections.get(name)
+    def query(self, *, name: str, query: str, k: int) -> List[Dict[str, Any]]:
+        """
+        Coarsely retrieve up to `k` hits from the named collection for `query`,
+        returning a list of {"page_content":..., "metadata":...} dicts.
+        """
+        col = self.client.get_collection(name)
+        results = col.query(
+            query_texts=[query],
+            n_results=k,
+            include=["documents", "metadatas"]
+        )
+        hits = []
+        # results["documents"] is [[doc1,doc2,...]] since we passed a single query_text
+        for text, meta in zip(results["documents"][0], results["metadatas"][0]):
+            hits.append({
+                "page_content": text,
+                "metadata": meta
+            })
+        return hits

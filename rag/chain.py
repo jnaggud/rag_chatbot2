@@ -32,8 +32,8 @@ class RAGChain:
             """
 You are a highly knowledgeable expert assistant. Use *only* the provided context to answer the user’s question combined with your expert knowledge.
 
-- If there are procedural steps, present them as **clear bullet points**.
-- After bullets, provide a **concise summary paragraphs** that synthesizes the answer.
+- If there are procedural steps, present them as many as necessary **clear bullet points**.
+- After bullets, provide **summary paragraphs** that synthesizes the answer in a verbose manner.
 - If the context does not contain the information, respond with “I don’t have enough information to answer this.”
 
 Context:
@@ -67,9 +67,29 @@ Answer:
             raise
 
     def _format_docs(self, docs):
+        """
+        Format retrieved documents (now dicts) into a single context string.
+
+        Args:
+            docs: List[dict] each with keys "page_content" & "metadata"
+
+        Returns:
+            A formatted string of all document texts.
+        """
         if not docs:
             return "No relevant information found."
-        return "\n\n".join(f"Document {i+1}:\n{d.page_content}" for i, d in enumerate(docs))
+
+        formatted = []
+        for i, doc in enumerate(docs):
+            # support both dicts and objects with .page_content
+            if hasattr(doc, "page_content"):
+                text = doc.page_content
+            else:
+                text = doc.get("page_content", "")
+            formatted.append(f"Document {i+1}:\n{text}")
+
+        return "\n\n".join(formatted)
+
 
     def run(self, query: str) -> str:
         if not query.strip():

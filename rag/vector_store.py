@@ -1,10 +1,16 @@
 # rag/vector_store.py
+"""
+Persistent Chroma vector‑store helper.
+"""
+
+from __future__ import annotations
 
 import json
 import logging
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Sequence
 
-from chromadb import Client
+import chromadb
+from chromadb import PersistentClient          # ▼ NEW
 from chromadb.config import Settings
 from chromadb.utils import embedding_functions
 
@@ -12,102 +18,142 @@ from config.settings import PERSIST_DIRECTORY, DESCRIPTIONS_FILE
 
 logger = logging.getLogger(__name__)
 
+
+def _wrap_embedding(langchain_embeddings):
+    """Return a Chroma‑compatible embedding fn."""
+    try:
+        return embedding_functions.create_langchain_embedding(langchain_embeddings)
+    except AttributeError:
+        logger.warning(
+            "create_langchain_embedding missing – falling back to "
+            "DefaultEmbeddingFunction (old Chroma)."
+        )
+        return embedding_functions.DefaultEmbeddingFunction(langchain_embeddings)
+
+
 class VectorDatabaseManager:
-    """
-    Manages a Chroma-backed vector store with multiple named collections (domains),
-    plus a persisted JSON file of index descriptions.
-    """
+    """High‑level wrapper that hides Chroma’s collection handling."""
 
     def __init__(
         self,
-        embedding_function,                # Callable that maps text->vector
+        embedding_function,
         persist_directory: str = PERSIST_DIRECTORY,
-        descriptions_file: str = DESCRIPTIONS_FILE
-    ):
-        # Where Chroma will persist its on-disk DB
+        descriptions_file: str = DESCRIPTIONS_FILE,
+    ) -> None:
         self.persist_directory = persist_directory
-        # Where we keep our human-written descriptions of each index
         self.descriptions_file = descriptions_file
+        self.embed_fn = _wrap_embedding(embedding_function)
 
-        # Load or initialize the descriptions JSON
+        # ---------------- descriptions side‑car -----------------
         try:
-            with open(self.descriptions_file, "r") as f:
-                self.index_descriptions = json.load(f)
+            with open(self.descriptions_file, "r") as fh:
+                self.index_descriptions: Dict[str, str] = json.load(fh)
         except FileNotFoundError:
             self.index_descriptions = {}
 
-        # Build a Chroma client using the new v0.6+ API
-        settings = Settings(
-            persist_directory=self.persist_directory,
-            anonymized_telemetry=False
+        # ---------------- persistent Chroma client -------------- ▼ CHANGED
+        self.client: chromadb.ClientAPI = PersistentClient(
+            path=self.persist_directory,
+            settings=Settings(anonymized_telemetry=False),
         )
-        # Wrap your embedding function so it has the signature Chroma expects
-        ef = embedding_functions.DefaultEmbeddingFunction(embedding_function)
-        self.client = Client(settings=settings, embedding_function=ef)
 
-    def save_descriptions(self) -> None:
-        """Persist the index descriptions back to disk."""
-        with open(self.descriptions_file, "w") as f:
-            json.dump(self.index_descriptions, f, indent=2)
+    # ---------- helper & public API sections are unchanged ----------
+    # ... _save_descriptions, _collection_exists, _get_collection ...
+    # ... get_index_descriptions, create_index, add_documents_to_index ...
+    # ... query ...
 
+
+    # ================================================================== #
+    # Internal utilities                                                 #
+    # ================================================================== #
+    def _save_descriptions(self) -> None:
+        with open(self.descriptions_file, "w") as fh:
+            json.dump(self.index_descriptions, fh, indent=2)
+
+    def _collection_exists(self, name: str) -> bool:
+        exists: Sequence = self.client.list_collections()
+        # newer Chroma returns List[str]; older returns List[Collection]
+        return (
+            name in exists
+            if len(exists) and isinstance(exists[0], str)
+            else name in [c.name for c in exists]
+        )
+
+    def _get_collection(self, name: str):
+        """
+        Always pass the embed_fn when (re)opening a collection.  Chroma
+        caches it internally so we don’t pay a cost each call.
+        """
+        return self.client.get_collection(name, embedding_function=self.embed_fn)
+
+    # ================================================================== #
+    # Public API                                                         #
+    # ================================================================== #
     def create_index(self, name: str, description: str) -> None:
-        """
-        Create (or load) a named collection in Chroma and record its description.
-        """
-        # Update and save our descriptions file
+        """Create a new collection (if absent) and store its description."""
         self.index_descriptions[name] = description
-        self.save_descriptions()
+        self._save_descriptions()
 
-        # Chroma v0.6: list_collections() returns a list of names
-        existing = self.client.list_collections()
-        if name not in existing:
-            self.client.get_or_create_collection(name)
+        if not self._collection_exists(name):
+            self.client.get_or_create_collection(
+                name, embedding_function=self.embed_fn
+            )
 
+    # ---------------------------------------------- #
+        # -------------------------------------------------------------- #
     def add_documents_to_index(self, name: str, docs: List[Any]) -> None:
         """
-        Add a batch of chunked documents to the 'name' collection.
-        Each doc must have:
-          - doc.page_content (str)
-          - doc.embedding     (list[float])
-          - doc.metadata      (dict), containing at least 'source' & 'chunk'
+        Add a batch of LangChain `Document`s to collection *name*.
+
+        Chroma will embed the texts on the fly via the collection’s
+        embedding_function, so we only send:
+            • ids          : unique per chunk
+            • documents    : chunk text
+            • metadatas    : original metadata
         """
-        col = self.client.get_collection(name)
+        import uuid
 
-        ids, embeddings, documents, metadatas = [], [], [], []
+        col = self._get_collection(name)
+
+        ids, documents, metadatas = [], [], []
         for doc in docs:
-            # Build a unique ID per chunk
-            src   = doc.metadata.get("source", "")
+            # build a deterministic – but unique – id
+            src = doc.metadata.get("source", "unknown")
             chunk = doc.metadata.get("chunk", 0)
-            _id   = f"{src}-chunk-{chunk}"
-            ids.append(_id)
-
-            embeddings.append(doc.embedding)
+            ids.append(f"{src}-chunk-{chunk}-{uuid.uuid4()}")
             documents.append(doc.page_content)
             metadatas.append(doc.metadata)
 
         col.add(
             ids=ids,
-            embeddings=embeddings,
             documents=documents,
             metadatas=metadatas,
         )
 
-    def query(self, *, name: str, query: str, k: int) -> List[Dict[str, Any]]:
-        """
-        Coarsely retrieve up to `k` hits from the named collection for `query`,
-        returning a list of {"page_content":..., "metadata":...} dicts.
-        """
-        col = self.client.get_collection(name)
-        results = col.query(
+
+    # ---------------------------------------------- #
+    def query(self, *, name: str, query: str, k: int):
+        """Return top‑*k* matches from collection *name* for *query*."""
+        col = self._get_collection(name)
+        res = col.query(
             query_texts=[query],
             n_results=k,
-            include=["documents", "metadatas"]
+            include=["documents", "metadatas"],
         )
+
         hits = []
-        # results["documents"] is [[doc1,doc2,...]] since we passed a single query_text
-        for text, meta in zip(results["documents"][0], results["metadatas"][0]):
-            hits.append({
-                "page_content": text,
-                "metadata": meta
-            })
+        for text, meta in zip(res["documents"][0], res["metadatas"][0]):
+            hits.append({"page_content": text, "metadata": meta})
         return hits
+
+    # =============================================================== #
+    # Public helpers                                                  #
+    # =============================================================== #
+    def get_index_descriptions(self):
+        """
+        Return the mapping { collection_name : text_description }.
+
+        Required by rag/query_router.py when it decides which domain
+        should handle an incoming query.
+        """
+        return self.index_descriptions

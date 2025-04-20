@@ -1,87 +1,53 @@
-"""
-Semantic reranking implementation for the RAG chatbot.
-"""
+# rag/reranker.py
 
 import logging
 import numpy as np
-from typing import List
+from config.settings import RERANK_TOP_K
 from langchain_core.documents import Document
-from config.settings import DEFAULT_TOP_K
 
 logger = logging.getLogger(__name__)
 
 class SemanticReranker:
-    """Reranks retrieved documents based on semantic similarity to the query."""
-    
-    def __init__(self, embedding_function, top_k: int = DEFAULT_TOP_K):
+    """
+    Given a list of candidate Documents, embed them along with the query,
+    compute similarity scores, and return the top_k best matches.
+    """
+    def __init__(self, embedding_function, top_k: int = RERANK_TOP_K):
         """
-        Initialize the semantic reranker.
-        
         Args:
-            embedding_function: Function to generate embeddings
-            top_k: Number of top documents to return after reranking
+            embedding_function: A function with .embed_query() and .embed_documents()
+            top_k: Number of documents to return after reranking
         """
         self.embedding_function = embedding_function
         self.top_k = top_k
-        
-        logger.info(f"Semantic Reranker initialized with top_k={top_k}")
-    
-    def rerank(self, query: str, documents: List[Document]) -> List[Document]:
+        logger.info(f"Semantic Reranker initialized with top_k={self.top_k}")
+
+    def rerank(self, query: str, docs: list[Document]) -> list[Document]:
         """
-        Rerank documents based on semantic similarity to the query.
-        
-        Args:
-            query: The user query
-            documents: List of documents to rerank
-            
-        Returns:
-            Reranked list of documents
+        Rerank the given docs for the query.
+
+        1) Embed the query
+        2) Embed each document
+        3) Compute dot‐product (cosine) similarity
+        4) Sort and return top_k
         """
-        if not documents:
-            logger.warning("No documents to rerank.")
+        if not docs:
             return []
-        
-        try:
-            # Get query embedding
-            query_embedding = self.embedding_function.embed_query(query)
-            
-            # Calculate similarities
-            similarities = []
-            for i, doc in enumerate(documents):
-                doc_text = doc.page_content
-                doc_embedding = self.embedding_function.embed_query(doc_text)
-                similarity = self._calculate_cosine_similarity(query_embedding, doc_embedding)
-                similarities.append((i, similarity))
-            
-            # Sort by similarity
-            sorted_idxs = sorted(similarities, key=lambda x: x[1], reverse=True)
-            
-            # Take top-k documents
-            top_k = min(self.top_k, len(documents))
-            top_doc_idxs = [idx for idx, _ in sorted_idxs[:top_k]]
-            
-            # Return reranked documents
-            reranked_docs = [documents[idx] for idx in top_doc_idxs]
-            
-            logger.info(f"Reranked {len(documents)} documents, returning top {top_k}.")
-            return reranked_docs
-        except Exception as e:
-            logger.error(f"Error in semantic reranking: {e}")
-            # Return original documents as fallback
-            return documents[:min(self.top_k, len(documents))]
-    
-    def _calculate_cosine_similarity(self, vec1, vec2) -> float:
-        """
-        Calculate cosine similarity between two vectors.
-        
-        Args:
-            vec1: First vector
-            vec2: Second vector
-            
-        Returns:
-            Cosine similarity value
-        """
-        dot_product = np.dot(vec1, vec2)
-        norm_vec1 = np.linalg.norm(vec1)
-        norm_vec2 = np.linalg.norm(vec2)
-        return dot_product / (norm_vec1 * norm_vec2)
+
+        # 1) embed query
+        query_emb = self.embedding_function.embed_query(query)
+
+        # 2) embed documents
+        doc_texts = [doc.page_content for doc in docs]
+        doc_embs = self.embedding_function.embed_documents(doc_texts)
+
+        # 3) compute similarity scores
+        #    assuming embeddings are L2-normalized or raw—dot is fine for ranking
+        scores = np.dot(doc_embs, query_emb)
+
+        # 4) rank and pick top_k
+        ranked_indices = np.argsort(scores)[::-1][: self.top_k]
+        reranked_docs = [docs[i] for i in ranked_indices]
+
+        logger.info(f"Reranked {len(docs)} docs down to top {len(reranked_docs)}")
+        return reranked_docs

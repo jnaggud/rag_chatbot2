@@ -4,46 +4,60 @@ Embedding functions for the RAG chatbot.
 
 import logging
 from config.settings import DEFAULT_EMBEDDING_MODEL
+from langchain_ollama import OllamaEmbeddings
 
 logger = logging.getLogger(__name__)
 
-def get_embedding_function(model_name=DEFAULT_EMBEDDING_MODEL):
+def get_embedding_function(model_name: str = DEFAULT_EMBEDDING_MODEL):
     """
-    Get the embedding function for semantic operations.
-    
-    Args:
-        model_name: Name of the embedding model to use
-        
-    Returns:
-        Embedding function
+    Return a LangChain Embeddings instance for the requested model.
+    Handles:
+      • Nomic‑AI `nomic-embed-text-*`
+      • Sentence‑Transformers  (e.g. all‑mpnet‑base‑v2)
+      • Anything else Hugging Face supports
     """
     try:
         from langchain_huggingface import HuggingFaceEmbeddings
-        
-        # Check if we're using the all-mpnet-base-v2 model
-        if "all-mpnet-base-v2" in model_name:
-            # Optimized settings for all-mpnet-base-v2
+
+        # ---------- Nomic‑AI models -------------------------------------------------
+        if model_name.startswith("nomic-ai/nomic-embed-text"):
+            # ✓ correct repo‑id, ✓ trust_remote_code so ST loads Nomic’s custom class
             model_kwargs = {
-                'device': 'cpu'  # Change to 'cuda' if you have a GPU
+                "device": "mps",              # "cuda" / "cpu" depending on your box
+                "trust_remote_code": True,
             }
             encode_kwargs = {
-                'normalize_embeddings': True,  # Important for cosine similarity
-                'batch_size': 16  # Adjust based on your available RAM
-                # Removed 'show_progress_bar': True - this is what caused the conflict
+                "normalize_embeddings": True,  # for cosine similarity
+                "batch_size": 64,              # tune to your VRAM / RAM
             }
-            
             embeddings = HuggingFaceEmbeddings(
                 model_name=model_name,
                 model_kwargs=model_kwargs,
                 encode_kwargs=encode_kwargs,
-                cache_folder="./model_cache"  # Cache the model locally
+                cache_folder="./model_cache",
             )
+
+        # ---------- Typical Sentence‑Transformers models ---------------------------
+        elif "all-mpnet-base-v2" in model_name:
+            model_kwargs = {"device": "cpu"}   # or "cuda"
+            encode_kwargs = {
+                "normalize_embeddings": True,
+                "batch_size": 16,
+            }
+            embeddings = HuggingFaceEmbeddings(
+                model_name=model_name,
+                model_kwargs=model_kwargs,
+                encode_kwargs=encode_kwargs,
+                cache_folder="./model_cache",
+            )
+
+        # ---------- Fallback -------------------------------------------------------
         else:
-            # Default settings for other models
             embeddings = HuggingFaceEmbeddings(model_name=model_name)
-        
-        logger.info(f"Embedding function using {model_name} created successfully.")
+
+        logger.info("Embedding function using %s created successfully", model_name)
         return embeddings
+
     except Exception as e:
-        logger.error(f"Error creating embedding function: {e}")
+        logger.error("Error creating embedding function: %s", e)
         raise

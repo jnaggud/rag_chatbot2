@@ -79,3 +79,9 @@ $RECYCLE.BIN/
 *.pkl
 *.sqlite
 model_cache/
+
+# ignore environment files
+.env
+
+# ignore generated index metadata
+index_descriptions.json

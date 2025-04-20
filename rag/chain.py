@@ -39,25 +39,28 @@ class RAGChain:
             num_ctx=4096,  # Increase context window
             repeat_penalty=1.1,
             top_k=10,
-            top_p=0.95
+            top_p=0.95,
+            max_tokens=2048,
+            stream=True
         )
         
         # Initialize the RAG prompt with clearer instructions
         self.prompt = PromptTemplate.from_template(
-            """
-            You are a helpful assistant that answers questions based on provided information.
-            
-            Below is some context information to help you answer the user's question:
-            
-            ---
+                """
+            You are a highly knowledgeable research assistant.
+            Answer the user’s question using *only* the provided context.
+            If the answer is not present, say “I don’t have enough information.”
+
+            Before answering, think through each step and cite every fact with its document number, e.g. [Doc 2].
+
+            Provide a **detailed**, **step‑by‑step** explanation of **at least 500 words**, covering every nuance and assumption.
+            Use paragraphs and subheadings as needed; do not use bullet points unless it clarifies the structure.
+
+            Context:
             {context}
-            ---
-            
+
             Question: {question}
-            
-            Provide a comprehensive, accurate, and helpful answer based only on the information in the context.
-            If the context doesn't contain the answer, say "I don't have enough information to answer this question."
-            
+
             Answer:
             """
         )

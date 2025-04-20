@@ -1,19 +1,30 @@
 #!/usr/bin/env python
-"""
-RAG Chatbot with Semantic Chunking, Reranking, and Query Routing
-Main entry point for the application.
-"""
+# main.py
 
-import argparse
+import os
 import sys
 import subprocess
-import os
+import argparse
 
-# Set up logging first
+
+# Ensure tokenizers warning suppressed
+os.environ["TOKENIZERS_PARALLELISM"] = os.environ.get("TOKENIZERS_PARALLELISM", "false")
+
 from utils.logging import setup_logging
 logger = setup_logging()
 
-# Import all required components
+from config.settings import (
+    PERSIST_DIRECTORY,
+    DESCRIPTIONS_FILE,
+    DEFAULT_EMBEDDING_MODEL,
+    AVAILABLE_LLM_MODELS,
+    DEFAULT_LLM_MODEL,
+    CHUNK_SIZE,
+    CHUNK_OVERLAP,
+    COARSE_TOP_K,
+    RERANK_TOP_K
+)
+
 from utils.dependencies import check_and_install_dependencies
 from models.ollama import check_and_install_ollama, pull_ollama_model
 from rag.document_loaders import load_documents
@@ -31,75 +42,59 @@ def setup_rag_chatbot(
     domain2_data_dir: str,
     domain1_description: str,
     domain2_description: str,
-    persist_directory: str = "./chroma_db",
-    model_name: str = "llama3"
+    persist_directory: str = PERSIST_DIRECTORY,
+    descriptions_file: str = DESCRIPTIONS_FILE,
+    model_name: str = DEFAULT_LLM_MODEL
 ):
-    """
-    Set up the complete RAG chatbot system.
-    
-    Args:
-        domain1_data_dir: Directory containing documents for the first domain
-        domain2_data_dir: Directory containing documents for the second domain
-        domain1_description: Description of the first domain for query routing
-        domain2_description: Description of the second domain for query routing
-        persist_directory: Directory to persist the vector database
-        model_name: Name of the Ollama model to use
-    
-    Returns:
-        The initialized chatbot instance
-    """
-    # Check and install dependencies
+    # Install everything
     check_and_install_dependencies()
-    
-    # Check and install Ollama
     check_and_install_ollama()
-    
-    # Pull the LLM model
     pull_ollama_model(model_name)
-    
-    # Create embedding function
-    embedding_function = get_embedding_function()
-    
-    # Initialize semantic chunking processor
-    chunking_processor = SemanticChunkingProcessor(embedding_function)
-    
-    # Initialize vector database manager
-    vector_db_manager = VectorDatabaseManager(embedding_function, persist_directory)
-    
-    # Create indexes for the two domains
-    vector_db_manager.create_index("domain1", domain1_description)
-    vector_db_manager.create_index("domain2", domain2_description)
-    
-    # Load and process documents for domain 1
-    domain1_docs = load_documents(domain1_data_dir)
-    if domain1_docs:
-        chunked_domain1_docs = chunking_processor.chunk_documents(domain1_docs)
-        vector_db_manager.add_documents_to_index("domain1", chunked_domain1_docs)
-    
-    # Load and process documents for domain 2
-    domain2_docs = load_documents(domain2_data_dir)
-    if domain2_docs:
-        chunked_domain2_docs = chunking_processor.chunk_documents(domain2_docs)
-        vector_db_manager.add_documents_to_index("domain2", chunked_domain2_docs)
-    
-    # Initialize query router
-    query_router = QueryRouter(vector_db_manager, embedding_function)
-    
-    # Initialize semantic reranker
-    semantic_reranker = SemanticReranker(embedding_function)
-    
-    # Initialize RAG retriever
-    rag_retriever = RAGRetriever(vector_db_manager, query_router, semantic_reranker)
-    
-    # Initialize RAG chain
-    rag_chain = RAGChain(rag_retriever, model_name)
-    
-    # Initialize chatbot
-    chatbot = RAGChatbot(rag_chain)
-    
-    logger.info("RAG Chatbot setup complete. Ready to chat!")
-    
-    return chatbot
+
+    # Embeddings
+    embedding_fn = get_embedding_function(DEFAULT_EMBEDDING_MODEL)
+
+    # Chunking
+    chunker = SemanticChunkingProcessor(
+        embedding_fn,
+        chunk_size=CHUNK_SIZE,
+        chunk_overlap=CHUNK_OVERLAP
+    )
+
+    # Vector DB
+    vdb = VectorDatabaseManager(
+        embedding_fn,
+        persist_directory=persist_directory,
+        descriptions_file=descriptions_file
+    )
+
+    # Index creation
+    vdb.create_index("domain1", domain1_description)
+    vdb.create_index("domain2", domain2_description)
+
+    # Load + incremental chunk & index
+    for name, data_dir in [("domain1", domain1_data_dir), ("domain2", domain2_data_dir)]:
+        docs = load_documents(data_dir)
+        if docs:
+            chunks = chunker.chunk_documents(docs)
+            vdb.add_documents_to_index(name, chunks)
+
+    # Routing, reranking, retrieving
+    router = QueryRouter(vdb, embedding_fn)
+    reranker = SemanticReranker(embedding_fn, top_k=RERANK_TOP_K)
+    retriever = RAGRetriever(
+        vdb, router, reranker,
+        coarse_top_k=COARSE_TOP_K,
+        rerank_top_k=RERANK_TOP_K
+    )
+
+    # Chain & chatbot
+    chain = RAGChain(retriever, model_name)
+    bot = RAGChatbot(chain)
+
+    logger.info("RAG Chatbot setup complete.")
+    return bot
+
 
 def run_streamlit_directly():
     """Run Streamlit directly without importing the module"""
@@ -132,7 +127,14 @@ def main():
     parser.add_argument("--desc1", type=str, required=False, default="First domain description", help="Description of domain 1")
     parser.add_argument("--desc2", type=str, required=False, default="Second domain description", help="Description of domain 2")
     parser.add_argument("--persist", type=str, default="./chroma_db", help="Directory to persist vector database")
-    parser.add_argument("--model", type=str, default="llama3", help="Ollama model to use")
+    #parser.add_argument("--model", type=str, default="llama3", help="Ollama model to use")
+    from config.settings import DEFAULT_LLM_MODEL
+    parser.add_argument(
+    "--model",
+    type=str,
+    default=DEFAULT_LLM_MODEL,
+    help="Ollama model to use"
+    )
     parser.add_argument("--web", action="store_true", help="Launch web interface instead of CLI")
     parser.add_argument("--streamlit", action="store_true", help="Launch Streamlit interface instead of CLI or web")
     

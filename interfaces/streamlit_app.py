@@ -176,7 +176,7 @@ def main():
         )
 
         # Model selection
-        MODELS = ["llama3", "nemotron"]
+        MODELS = ["llama3", "nemotron", "gemma3", "gemma3:27b"]
         default = st.session_state.get("model_name","llama3")
         if default not in MODELS:
             MODELS.insert(0, default)
@@ -201,7 +201,8 @@ def main():
             col1, col2 = st.columns(2)
             if col1.button("Re‑run setup"):
                 st.session_state.setup_complete = False
-                st.experimental_rerun()
+                #st.experimental_rerun()
+                st.rerun()
             if col2.button("Force re‑index & chunk"):
                 init_rag(force_rebuild=True)
 

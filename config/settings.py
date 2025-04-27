@@ -31,8 +31,8 @@ DEFAULT_DESCRIPTIONS_FILE    = DESCRIPTIONS_FILE
 #
 # Chunking
 #
-CHUNK_SIZE                   = 256
-CHUNK_OVERLAP                = 128
+CHUNK_SIZE                   = 1028 #was 256
+CHUNK_OVERLAP                = 256
 BREAKPOINT_THRESHOLD_AMOUNT  = _cfg["chunking"]["breakpoint_threshold_amount"]
 BREAKPOINT_THRESHOLD_TYPE    = _cfg["chunking"]["breakpoint_threshold_type"]
 

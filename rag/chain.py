@@ -20,17 +20,18 @@ class RAGChain:
         # ChatOllama setup
         self.llm = ChatOllama(
             model=model_name,
-            temperature=0.3,
-            num_ctx=4096,
-            repeat_penalty=1.1,
-            top_k=10,
+            temperature=0.4,
+            num_ctx=8192, #was 
+            repeat_penalty=1.2,
+            top_k=25,
             top_p=0.95
         )
 
         # **Generic expert assistant prompt**
-        self.prompt = PromptTemplate.from_template(
-            """
-You are a highly knowledgeable expert assistant. Use *only* the provided context to answer the user’s question combined with your expert knowledge.
+        self.prompt = PromptTemplate.from_template(#had use **only**
+            """ 
+You are a highly knowledgeable expert assistant in multiple domains. Use the provided context to answer the user’s question combined with your expert knowledge.
+Please provide a detailed, step-by-step, and comprehensive answer. Use as many words as necessary to fully explain the topic. 
 
 - If there are procedural steps, present them as many as necessary **clear bullet points**.
 - After bullets, provide **summary paragraphs** that synthesizes the answer in a verbose manner.

@@ -50,10 +50,14 @@ Answer:
 
     def _build_chain(self):
         try:
-            # run retrieval in parallel, pass question straight through
+            # run retrieval in parallel, pass question and use_hyde through
+            def context_fn(inputs):
+                # inputs is a dict: {"question": ..., "use_hyde": ...}
+                return self.retriever.retrieve(inputs["question"], use_hyde=inputs.get("use_hyde", False))
+
             runnable_map = RunnableParallel(
-                context=lambda q: self.retriever.retrieve(q),
-                question=RunnablePassthrough()
+                context=context_fn,
+                question=lambda inputs: inputs["question"]
             )
             self.chain = (
                 runnable_map
@@ -91,13 +95,17 @@ Answer:
         return "\n\n".join(formatted)
 
 
-    def run(self, query: str) -> str:
-        if not query.strip():
-            return "Please ask a question."
-        try:
-            logger.info(f"Invoking chain on query: {query}")
-            resp = self.chain.invoke(query)
-            return resp.strip() or "I’m sorry, I couldn’t generate a response. Please try again."
-        except Exception as e:
-            logger.error("Error in RAGChain.run", exc_info=True)
-            return f"I encountered an error: {e}"
+    # def run(self, query: str) -> str:
+    # #def run(self, user_input: str, use_hyde: bool = False):
+    #     if not query.strip():
+    #         return "Please ask a question."
+    #     try:
+    #         logger.info(f"Invoking chain on query: {query}")
+    #         resp = self.chain.invoke(query)
+    #         return resp.strip() or "I’m sorry, I couldn’t generate a response. Please try again."
+    #     except Exception as e:
+    #         logger.error("Error in RAGChain.run", exc_info=True)
+    #         return f"I encountered an error: {e}"
+
+    def run(self, user_input: str, use_hyde: bool = False):
+        return self.chain.invoke({"question": user_input, "use_hyde": use_hyde})

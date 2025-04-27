@@ -157,3 +157,15 @@ class VectorDatabaseManager:
         should handle an incoming query.
         """
         return self.index_descriptions
+
+    # # In rag/vector_store.py, in VectorDatabaseManager
+    # def query_by_vector(self, name, query_vector, k=10):
+    #     collection = self.client.get_collection(name=name)
+    #     return collection.query(query_embeddings=[query_vector], n_results=k)
+    def query_by_vector(self, name, query_vector, k=10):
+        collection = self.client.get_collection(name=name)
+        res = collection.query(query_embeddings=[query_vector], n_results=k, include=["documents", "metadatas"])
+        hits = []
+        for text, meta in zip(res["documents"][0], res["metadatas"][0]):
+            hits.append({"page_content": text, "metadata": meta})
+        return hits

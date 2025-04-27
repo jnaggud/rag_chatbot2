@@ -145,6 +145,9 @@ def main():
     with st.sidebar:
         st.header("Settings")
 
+        # HyDE Retrieval
+        st.session_state.use_hyde = st.checkbox("Enable HyDE Retrieval", value=st.session_state.get("use_hyde", False))
+
         # Domain 1
         st.session_state.domain1_dir  = st.text_input(
             "Domain 1 data directory",
@@ -228,7 +231,8 @@ def main():
             placeholder = st.empty()
             with st.spinner("Thinking…"):
                 try:
-                    answer = st.session_state.chatbot.chat(question)
+                    #answer = st.session_state.chatbot.chat(question)
+                    answer = st.session_state.chatbot.chat(question, use_hyde=st.session_state.use_hyde)
                     if not answer.strip():
                         answer = "❗️ Empty response—try rephrasing."
                 except Exception as e:

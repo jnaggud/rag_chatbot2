@@ -25,7 +25,8 @@ class RAGChatbot:
         
         logger.info("RAG Chatbot initialized.")
     
-    def chat(self, user_input: str) -> str:
+    #def chat(self, user_input: str) -> str:
+    def chat(self, user_input: str, use_hyde: bool = False) -> str:
         """
         Process a user input and generate a response.
         
@@ -46,7 +47,8 @@ class RAGChatbot:
             self.conversation_history.append({"role": "user", "content": user_input})
             
             # Generate response using RAG chain
-            response = self.rag_chain.run(user_input)
+            #response = self.rag_chain.run(user_input, use_hyde)
+            response = self.rag_chain.run(user_input, use_hyde=use_hyde)
             
             # Check if response is empty and provide fallback
             if not response or not response.strip():

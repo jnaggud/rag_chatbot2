@@ -3,6 +3,8 @@
 import logging
 from config.settings import COARSE_TOP_K
 from typing import List, Dict, Any
+# At the top
+from utils.hyde_utils import hyde_embed_query
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +36,8 @@ class RAGRetriever:
         self.coarse_k = coarse_k
         logger.info(f"RAG Retriever initialized with coarse_k={self.coarse_k}")
 
-    def retrieve(self, query: str) -> List[Dict[str, Any]]:
+# In RAGRetriever class, change:
+    def retrieve(self, query: str, use_hyde: bool = False) -> List[Dict[str, Any]]:
         """
         Given a user query, return a list of document dicts,
         sorted by semantic relevance after reranking.
@@ -47,11 +50,20 @@ class RAGRetriever:
         # 2) gather coarse results
         all_hits = []
         for domain in domains:
-            hits = self.vdb.query(
-                name=domain,
-                query=query,
-                k=self.coarse_k
-            )
+            if use_hyde:
+                # Use HyDE embedding for retrieval
+                query_vec = hyde_embed_query(query)
+                hits = self.vdb.query_by_vector(
+                    name=domain,
+                    query_vector=query_vec,
+                    k=self.coarse_k
+                )
+            else:
+                hits = self.vdb.query(
+                    name=domain,
+                    query=query,
+                    k=self.coarse_k
+                )
             logger.debug(f"Fetched {len(hits)} hits from domain '{domain}'")
             all_hits.extend(hits)
 

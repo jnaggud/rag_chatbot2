@@ -28,6 +28,10 @@ source venv/bin/activate  # On Windows: venv\Scripts\activate
 
 5. Pull the required model: ollama pull llama3
 
+6. Pull the required model: ollama pull qwen3:32b
+
+7. Pull the required model: ollama pull gemma3:27b
+
 ## Usage
 
 1. Add your PDF documents to the data directories:

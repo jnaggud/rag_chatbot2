@@ -179,8 +179,11 @@ def main():
         )
 
         # Model selection
-        MODELS = ["llama3", "nemotron", "gemma3", "gemma3:27b"]
-        default = st.session_state.get("model_name","llama3")
+        from config.settings import AVAILABLE_LLM_MODELS, DEFAULT_LLM_MODEL
+        MODELS = AVAILABLE_LLM_MODELS
+        default = st.session_state.get("model_name", DEFAULT_LLM_MODEL)
+        #MODELS = ["llama3", "nemotron", "gemma3", "gemma3:27b", "qwen3:32b"]
+        #default = st.session_state.get("model_name","gemma3:27b")
         if default not in MODELS:
             MODELS.insert(0, default)
         st.session_state.model_name = st.selectbox(

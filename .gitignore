@@ -84,4 +84,4 @@ model_cache/
 .env
 
 # ignore generated index metadata
-index_descriptions.json
+#index_descriptions.json

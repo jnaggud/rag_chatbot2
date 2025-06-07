@@ -34,7 +34,8 @@ You are a highly knowledgeable expert assistant. Use *only* the provided context
 
 - If there are procedural steps, present them as many as necessary **clear bullet points**.
 - After bullets, provide **summary paragraphs** that synthesizes the answer in a verbose manner.
-- If the context does not contain the information, respond with “I don’t have enough information to answer this.”
+- cite your sources of information 
+#- If the context does not contain the information, respond with “I don’t have enough information to answer this.”
 
 Context:
 {context}

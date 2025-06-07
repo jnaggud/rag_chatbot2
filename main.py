@@ -1,4 +1,5 @@
-#!/usr/bin/env python
+#echo "langchain-huggingface>=0.0.15" >> requirements.txt
+#pip install -r requirements.txt#!/usr/bin/env python
 # main.py
 
 import os

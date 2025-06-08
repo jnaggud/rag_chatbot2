@@ -6,6 +6,7 @@ import subprocess
 import platform
 import traceback
 import logging
+import json
 
 import streamlit as st
 
@@ -25,7 +26,7 @@ from rag.retriever import RAGRetriever
 from rag.chain import RAGChain
 from interfaces.chatbot import RAGChatbot
 
-from config.settings import DEFAULT_PERSIST_DIRECTORY, DEFAULT_DESCRIPTIONS_FILE
+from config.settings import DEFAULT_PERSIST_DIRECTORY, DEFAULT_DESCRIPTIONS_FILE, AVAILABLE_LLM_MODELS, DEFAULT_LLM_MODEL
 
 logger = setup_logging()
 
@@ -139,103 +140,137 @@ def init_rag(force_rebuild: bool):
 
 
 def main():
-    st.title("🔗 RAG Chatbot Configuration")
+    st.title("🔗 RAG Chatbot Configuration & Chat")
 
-    # --- Sidebar inputs ---
+    # --- Initialize session state for settings if they aren't already set ---
+    # This section runs on every script rerun, but conditions like 
+    # `if "key" not in st.session_state:` ensure initialization happens once.
+
+    # 1. Descriptions file path
+    if "descriptions_file" not in st.session_state:
+        st.session_state.descriptions_file = DEFAULT_DESCRIPTIONS_FILE
+    descriptions_filepath = st.session_state.descriptions_file
+
+    # 2. Domain descriptions (load from file or use fallbacks)
+    default_desc1 = "First domain of documents"
+    default_desc2 = "Second domain of documents"
+    
+    loaded_desc1 = default_desc1
+    loaded_desc2 = default_desc2
+
+    if os.path.exists(descriptions_filepath):
+        try:
+            with open(descriptions_filepath, "r") as f:
+                descriptions_data = json.load(f)
+                loaded_desc1 = descriptions_data.get("domain1", default_desc1)
+                loaded_desc2 = descriptions_data.get("domain2", default_desc2)
+        except (json.JSONDecodeError, IOError) as e:
+            logger.warning(f"Could not load or parse {descriptions_filepath}: {e}. Using default descriptions.")
+    
+    # Initialize session state for text_areas if not already set by user interaction
+    if "domain1_desc" not in st.session_state:
+        st.session_state.domain1_desc = loaded_desc1
+    if "domain2_desc" not in st.session_state:
+        st.session_state.domain2_desc = loaded_desc2
+
+    # 3. Other settings paths and model (initialize if not in session state)
+    if "domain1_dir" not in st.session_state:
+        st.session_state.domain1_dir = "./data/domain1"
+    if "domain2_dir" not in st.session_state:
+        st.session_state.domain2_dir = "./data/domain2"
+    if "persist_dir" not in st.session_state:
+        st.session_state.persist_dir = DEFAULT_PERSIST_DIRECTORY
+    if "model_name" not in st.session_state:
+        st.session_state.model_name = DEFAULT_LLM_MODEL
+    
+    # Initialize rag_chatbot in session_state if not present
+    if "rag_chatbot" not in st.session_state:
+        st.session_state.rag_chatbot = None
+
+
+    # --- Sidebar UI for Configuration ---
     with st.sidebar:
         st.header("Settings")
 
-        # Domain 1
-        st.session_state.domain1_dir  = st.text_input(
-            "Domain 1 data directory",
-            value=st.session_state.get("domain1_dir","./data/domain1")
-        )
-        st.session_state.domain1_desc = st.text_area(
-            "Domain 1 description",
-            value=st.session_state.get("domain1_desc","First domain of documents")
-        )
+        st.text_input("Domain 1 data directory", key="domain1_dir")
+        st.text_area("Domain 1 description", key="domain1_desc", height=100)
 
-        # Domain 2
-        st.session_state.domain2_dir  = st.text_input(
-            "Domain 2 data directory",
-            value=st.session_state.get("domain2_dir","./data/domain2")
-        )
-        st.session_state.domain2_desc = st.text_area(
-            "Domain 2 description",
-            value=st.session_state.get("domain2_desc","Second domain of documents")
-        )
+        st.text_input("Domain 2 data directory", key="domain2_dir")
+        st.text_area("Domain 2 description", key="domain2_desc", height=100)
 
-        # Persistence & descriptions
-        st.session_state.persist_dir       = st.text_input(
-            "Chroma persist directory",
-            value=st.session_state.get("persist_dir", DEFAULT_PERSIST_DIRECTORY)
-        )
-        st.session_state.descriptions_file = st.text_input(
-            "Index descriptions file",
-            value=st.session_state.get("descriptions_file", DEFAULT_DESCRIPTIONS_FILE)
+        st.text_input("Chroma persist directory", key="persist_dir")
+        st.text_input("Index descriptions file", key="descriptions_file")
+        
+        current_model_in_state = st.session_state.model_name
+        if current_model_in_state not in AVAILABLE_LLM_MODELS:
+            logger.warning(f"Model '{current_model_in_state}' in session state not in AVAILABLE_LLM_MODELS. Defaulting to first available.")
+            st.session_state.model_name = AVAILABLE_LLM_MODELS[0] if AVAILABLE_LLM_MODELS else ""
+
+        st.selectbox(
+            "Select LLM Model",
+            options=AVAILABLE_LLM_MODELS, # Ensure AVAILABLE_LLM_MODELS is loaded from config
+            key="model_name"
         )
 
-        # Model selection
-        MODELS = ["llama3", "nemotron", "gemma3", "gemma3:27b"]
-        default = st.session_state.get("model_name","llama3")
-        if default not in MODELS:
-            MODELS.insert(0, default)
-        st.session_state.model_name = st.selectbox(
-            "Choose LLM model",
-            options=MODELS,
-            index=MODELS.index(default),
-        )
-
-        # Rebuild checkbox
-        st.session_state.force_rebuild = st.checkbox(
-            "Rebuild indexes & chunks on setup",
-            value=False
-        )
-
-        st.markdown("---")
-        if not st.session_state.get("setup_complete", False):
-            if st.button("Setup RAG Chatbot"):
-                with st.spinner("Initializing…"):
-                    init_rag(force_rebuild=st.session_state.force_rebuild)
-        else:
-            col1, col2 = st.columns(2)
-            if col1.button("Re‑run setup"):
-                st.session_state.setup_complete = False
-                #st.experimental_rerun()
-                st.rerun()
-            if col2.button("Force re‑index & chunk"):
-                init_rag(force_rebuild=True)
-
-    # --- Main chat area ---
-    if not st.session_state.get("setup_complete", False):
-        st.info("▶️ Click **Setup RAG Chatbot** to build or load your indexes first.")
-        return
-
-    st.header("💬 Chat with your documents")
-    if "messages" not in st.session_state:
-        st.session_state.messages = []
-
-    # Display chat history
-    for msg in st.session_state.messages:
-        with st.chat_message(msg["role"]):
-            st.markdown(msg["content"])
-
-    # New question
-    question = st.chat_input("Ask a question…")
-    if question:
-        st.session_state.messages.append({"role":"user","content":question})
-        with st.chat_message("assistant"):
-            placeholder = st.empty()
-            with st.spinner("Thinking…"):
+        if st.button("🚀 Initialize/Rebuild RAG System", type="primary"):
+            if not is_ollama_running():
+                 st.sidebar.error("❌ Ollama isn’t running. Run `ollama serve` first.")
+            else:
+                with st.spinner("Initializing RAG system..."):
+                    success = init_rag(force_rebuild=True) 
+                    if success:
+                        st.session_state.rag_chatbot = RAGChatbot(st.session_state.model_name)
+                        st.sidebar.success("RAG system initialized/rebuilt successfully!")
+                    else:
+                        st.sidebar.error("RAG system initialization/rebuild failed. Check logs.")
+        
+        if st.button("🔄 Reload Descriptions from File"):
+            descriptions_filepath_reload = st.session_state.descriptions_file
+            reloaded_desc1_btn = default_desc1
+            reloaded_desc2_btn = default_desc2
+            if os.path.exists(descriptions_filepath_reload):
                 try:
-                    answer = st.session_state.chatbot.chat(question)
-                    if not answer.strip():
-                        answer = "❗️ Empty response—try rephrasing."
-                except Exception as e:
-                    logger.error(traceback.format_exc())
-                    answer = f"💥 Error: {str(e)}"
-            placeholder.markdown(answer)
-            st.session_state.messages.append({"role":"assistant","content":answer})
+                    with open(descriptions_filepath_reload, "r") as f:
+                        descriptions_data = json.load(f)
+                        reloaded_desc1_btn = descriptions_data.get("domain1", default_desc1)
+                        reloaded_desc2_btn = descriptions_data.get("domain2", default_desc2)
+                    st.session_state.domain1_desc = reloaded_desc1_btn
+                    st.session_state.domain2_desc = reloaded_desc2_btn
+                    st.sidebar.success(f"Descriptions reloaded into UI from {descriptions_filepath_reload}")
+                    st.experimental_rerun() 
+                except (json.JSONDecodeError, IOError) as e:
+                    st.sidebar.error(f"Failed to reload from {descriptions_filepath_reload}: {e}")
+            else:
+                st.sidebar.warning(f"File not found: {descriptions_filepath_reload}")
+
+    # --- Main Chat Interface ---
+    st.header("💬 Chat with your RAG System")
+
+    if "messages" not in st.session_state:
+        st.session_state.messages = [{"role": "assistant", "content": "Hi! How can I help you today? (Please initialize RAG system from sidebar if you haven't yet)"}]
+
+    for message in st.session_state.messages:
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
+
+    if prompt := st.chat_input("What is your question?"):
+        st.session_state.messages.append({"role": "user", "content": prompt})
+        with st.chat_message("user"):
+            st.markdown(prompt)
+
+        with st.chat_message("assistant"):
+            message_placeholder = st.empty()
+            if st.session_state.rag_chatbot is None:
+                if not is_ollama_running():
+                    full_response = "Ollama is not running. Please start Ollama and initialize the RAG system from the sidebar."
+                else:
+                    full_response = "RAG system is not initialized. Please use the 'Initialize/Rebuild RAG System' button in the sidebar."
+                st.warning(full_response)
+            else:
+                with st.spinner("Thinking..."):
+                    full_response = st.session_state.rag_chatbot.ask(prompt)
+            message_placeholder.markdown(full_response)
+        st.session_state.messages.append({"role": "assistant", "content": full_response})
 
 
 if __name__ == "__main__":

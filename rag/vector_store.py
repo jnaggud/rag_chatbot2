@@ -103,9 +103,10 @@ class VectorDatabaseManager:
         # -------------------------------------------------------------- #
     def add_documents_to_index(self, name: str, docs: List[Any]) -> None:
         """
-        Add a batch of LangChain `Document`s to collection *name*.
+        Add a batch of documents to collection *name*.
 
-        Chroma will embed the texts on the fly via the collection’s
+        Handles both dictionary-style and LangChain Document objects.
+        Chroma will embed the texts on the fly via the collection's
         embedding_function, so we only send:
             • ids          : unique per chunk
             • documents    : chunk text
@@ -116,19 +117,40 @@ class VectorDatabaseManager:
         col = self._get_collection(name)
 
         ids, documents, metadatas = [], [], []
-        for doc in docs:
-            # build a deterministic – but unique – id
-            src = doc.metadata.get("source", "unknown")
-            chunk = doc.metadata.get("chunk", 0)
-            ids.append(f"{src}-chunk-{chunk}-{uuid.uuid4()}")
-            documents.append(doc.page_content)
-            metadatas.append(doc.metadata)
+        for i, doc in enumerate(docs):
+            # Handle both Document objects and dictionaries
+            if hasattr(doc, 'metadata'):  # It's a Document object
+                metadata = doc.metadata
+                content = doc.page_content
+            else:  # It's a dictionary
+                metadata = doc.get('metadata', {})
+                content = doc.get('page_content', '')
+            
+            # Ensure metadata is a dictionary
+            if not isinstance(metadata, dict):
+                metadata = {}
+            
+            # Generate a deterministic but unique ID
+            src = metadata.get("source", "unknown")
+            chunk_id = f"{src}-chunk-{i}-{uuid.uuid4()}"
+            
+            # Skip empty documents
+            if not content.strip():
+                continue
+                
+            ids.append(chunk_id)
+            documents.append(content)
+            metadatas.append(metadata)
 
-        col.add(
-            ids=ids,
-            documents=documents,
-            metadatas=metadatas,
-        )
+        if ids:  # Only add if we have valid documents
+            col.add(
+                ids=ids,
+                documents=documents,
+                metadatas=metadatas,
+            )
+            logger.info(f"Added {len(ids)} documents to index '{name}'")
+        else:
+            logger.warning(f"No valid documents to add to index '{name}'")
 
 
     # ---------------------------------------------- #

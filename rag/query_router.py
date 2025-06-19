@@ -37,17 +37,28 @@ class QueryRouter:
         #    Expect a dict: { "domain1": "Description text …", ... }
         descriptions = self.vdb.get_index_descriptions()
 
+        logger.info(f"Routing query: '{query}'")
+        logger.info(f"Available domain descriptions for routing: {descriptions}")
+
         scores = []
         for name, desc in descriptions.items():
             # embed each domain description
             d_emb = self.embedding_fn.embed_query(desc)
             # cosine similarity
             sim = float(np.dot(q_emb, d_emb) / ((norm(q_emb) * norm(d_emb)) + 1e-10))
+            logger.info(f"  Domain: '{name}', Similarity: {sim:.4f}, Description: '{desc}'")
             scores.append((name, sim))
 
         # 3) sort by similarity descending, take top_k
         scores.sort(key=lambda x: x[1], reverse=True)
-        top_domains = [name for name, _ in scores[: self.top_k]]
+        logger.info(f"Sorted routing scores: {scores}")
+        
+        # Always select only the top 1 domain for routing purposes
+        # If scores is empty, top_domains will be empty.
+        top_domains = [scores[0][0]] if scores else [] 
+        logger.info(f"Selected top 1 domain(s) for query '{query}': {top_domains}")
 
+        # The original log line below might be slightly misleading if top_domains is empty
+        # Consider adjusting if it causes confusion, but the core logic is above.
         logger.info(f"Routed query “{query}” → {top_domains}")
         return top_domains

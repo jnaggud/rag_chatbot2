@@ -39,7 +39,7 @@ BREAKPOINT_THRESHOLD_TYPE    = _cfg["chunking"]["breakpoint_threshold_type"]
 #
 # Retrieval
 #
-COARSE_TOP_K                 = 20
+COARSE_TOP_K                 = _cfg["retrieval"]["coarse_top_k"]
 RERANK_TOP_K                 = _cfg["retrieval"]["rerank_top_k"]
 
 #

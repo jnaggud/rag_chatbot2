@@ -2,26 +2,40 @@
 
 import os
 import glob
-from langchain.document_loaders import PyPDFLoader
+import logging
+from langchain_community.document_loaders import PyPDFium2Loader, DirectoryLoader
 
-def load_documents(directory: str):
+logger = logging.getLogger(__name__)
+
+class DocumentLoader:
     """
-    Recursively load all PDFs under `directory`, split them per page,
-    and tag each Document with its source filepath.
+    A unified document loader that handles different file types and directories.
     """
-    documents = []
-    # Find every PDF in subfolders
-    pattern = os.path.join(directory, "**", "*.pdf")
-    for path in glob.glob(pattern, recursive=True):
-        # 1) Initialize loader with path only
-        loader = PyPDFLoader(path)
-        # 2) Split into page-level Documents
-        docs = loader.load_and_split()
-        # 3) Attach the source filename to metadata
-        for doc in docs:
-            # ensure there's a metadata dict
-            if not hasattr(doc, "metadata") or doc.metadata is None:
-                doc.metadata = {}
-            doc.metadata["source"] = path
-        documents.extend(docs)
-    return documents
+    def __init__(self, path):
+        self.path = path
+
+    def load_documents(self):
+        logger.info(f"Loading documents from: {self.path}")
+        loader = DirectoryLoader(
+            self.path,
+            glob="**/*.pdf",
+            loader_cls=PyPDFium2Loader,
+            show_progress=True,
+            use_multithreading=True,
+        )
+        documents = loader.load()
+        logger.info(f"Successfully loaded {len(documents)} documents.")
+        return documents
+
+def load_documents(path):
+    """
+    Load documents from the specified path.
+    
+    Args:
+        path (str): Path to the directory containing documents or a specific document file
+        
+    Returns:
+        List[Document]: List of loaded documents
+    """
+    loader = DocumentLoader(path)
+    return loader.load_documents()

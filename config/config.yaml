@@ -4,8 +4,8 @@ persist_directory: "./chroma_db"
 descriptions_file: "./index_descriptions.json"
 
 chunking:
-  chunk_size: 512
-  chunk_overlap: 128
+  chunk_size: 256
+  chunk_overlap: 64
   breakpoint_threshold_amount: 0.15
   breakpoint_threshold_type: "percentile"
 
@@ -24,7 +24,8 @@ llm:
     - vicuna
 
 logging:
-  level: "INFO"
+  #level: "INFO"
+  level: "DEBUG"
 
 environment:
   tokenizers_parallelism: false

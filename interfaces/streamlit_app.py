@@ -183,9 +183,9 @@ def main():
     if "model_name" not in st.session_state:
         st.session_state.model_name = DEFAULT_LLM_MODEL
     
-    # Initialize rag_chatbot in session_state if not present
-    if "rag_chatbot" not in st.session_state:
-        st.session_state.rag_chatbot = None
+    # Initialize chatbot in session_state if not present
+    if "chatbot" not in st.session_state:
+        st.session_state.chatbot = None
 
 
     # --- Sidebar UI for Configuration ---
@@ -219,7 +219,7 @@ def main():
                 with st.spinner("Initializing RAG system..."):
                     success = init_rag(force_rebuild=True) 
                     if success:
-                        st.session_state.rag_chatbot = RAGChatbot(st.session_state.model_name)
+                        # init_rag now correctly sets st.session_state.chatbot
                         st.sidebar.success("RAG system initialized/rebuilt successfully!")
                     else:
                         st.sidebar.error("RAG system initialization/rebuild failed. Check logs.")
@@ -260,7 +260,7 @@ def main():
 
         with st.chat_message("assistant"):
             message_placeholder = st.empty()
-            if st.session_state.rag_chatbot is None:
+            if st.session_state.chatbot is None:
                 if not is_ollama_running():
                     full_response = "Ollama is not running. Please start Ollama and initialize the RAG system from the sidebar."
                 else:
@@ -268,7 +268,7 @@ def main():
                 st.warning(full_response)
             else:
                 with st.spinner("Thinking..."):
-                    full_response = st.session_state.rag_chatbot.ask(prompt)
+                    full_response = st.session_state.chatbot.chat(prompt)
             message_placeholder.markdown(full_response)
         st.session_state.messages.append({"role": "assistant", "content": full_response})
 

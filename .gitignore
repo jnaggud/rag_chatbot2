@@ -79,3 +79,4 @@ $RECYCLE.BIN/
 *.pkl
 *.sqlite
 model_cache/
+.env

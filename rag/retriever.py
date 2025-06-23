@@ -1,7 +1,7 @@
 # rag/retriever.py
 
 import logging
-import time  # Add this line
+import time
 from typing import List, Dict, Any, Set, Optional
 from config.settings import COARSE_TOP_K
 from rank_bm25 import BM25Okapi
@@ -276,8 +276,53 @@ class RAGRetriever:
                     query_length=len(query)
                 ))
             
+            # Track last retrieval for observability
+            self.last_query = query
+            self.last_retrieved_docs = reranked
+            self.last_scores = [doc.get('_rerank_score', 0) for doc in reranked]
+            self.last_retrieval_time = time.time() - start_time
+            self.last_retrieval_metadata = {
+                'index_used': ",".join(domains) if domains else "unknown",
+                'num_retrieved': len(reranked),
+                'avg_score': sum(self.last_scores) / len(self.last_scores) if self.last_scores else 0,
+                'query_length': len(query.split())
+            }
+            
+            logger.info(
+                f"Retrieved {len(reranked)} documents for query '{query[:50]}...' "
+                f"(avg score: {self.last_retrieval_metadata['avg_score']:.3f}, "
+                f"time: {self.last_retrieval_time:.3f}s)"
+            )
+            
             return reranked
             
         except Exception as e:
-            logger.error(f"Error in retrieve: {e}", exc_info=True)
+            logger.error(f"Error in retrieve: {str(e)}", exc_info=True)
+            self.last_retrieval_metadata = {
+                'error': str(e),
+                'query': query
+            }
             return []
+
+    def get_retrieval_metrics(self) -> Dict[str, Any]:
+        """
+        Get metrics about the last retrieval operation.
+        
+        Returns:
+            Dictionary containing retrieval metrics
+        """
+        return {
+            'query': self.last_query,
+            'num_documents': len(self.last_retrieved_docs),
+            'scores': self.last_scores,
+            'retrieval_time': self.last_retrieval_time,
+            'documents': [
+                {
+                    'page_content': doc.get('page_content', '')[:200] + ('...' if len(doc.get('page_content', '')) > 200 else ''),
+                    'metadata': doc.get('metadata', {}),
+                    'score': score
+                }
+                for doc, score in zip(self.last_retrieved_docs, self.last_scores)
+            ],
+            **self.last_retrieval_metadata
+        }

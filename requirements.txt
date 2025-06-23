@@ -27,7 +27,7 @@ httpx>=0.24.0
 pydantic>=2.0.0
 typer>=0.9.0
 rich>=13.5.0
-numpy>=1.23.0
+numpy>=1.24.0
 python-dotenv>=1.0.0
 
 # --- app ---
@@ -35,4 +35,17 @@ streamlit>=1.43.1
 langchain-huggingface>=0.0.15
 langchain-huggingface>=0.0.15
 rank_bm25>=0.2.2
-numpy>=1.21.0
+
+# PDF Processing
+PyMuPDF>=1.22.0  # For PDF text extraction with layout analysis
+pytesseract>=0.3.10  # For OCR of images in PDFs
+pypdf>=3.0.0  # For PDF metadata and basic text extraction
+Pillow>=10.0.0  # For image processing
+tiktoken>=0.4.0  # For accurate token counting
+
+# Visualization
+plotly>=5.13.0
+pandas>=1.5.0
+
+# Metrics and monitoring
+pyyaml>=6.0.1

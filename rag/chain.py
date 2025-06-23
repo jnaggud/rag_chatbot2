@@ -30,19 +30,23 @@ class RAGChain:
         # **Generic expert assistant prompt**
         self.prompt = PromptTemplate.from_template(
             """
-You are a highly knowledgeable expert assistant. Use *only* the provided context to answer the user’s question combined with your expert knowledge.
+You are a highly knowledgeable expert assistant. Use *only* the provided context to answer the user's question combined with your expert knowledge.
 
-- If there are procedural steps, present them as many as necessary **clear bullet points**.
-- After bullets, provide **summary paragraphs** that synthesizes the answer in a verbose manner.
-- cite your sources of information 
-#- If the context does not contain the information, respond with “I don’t have enough information to answer this.”
+## Instructions:
+1. Provide a clear, concise answer to the question.
+2. If there are procedural steps, present them as bullet points.
+3. Include a summary paragraph that synthesizes the answer.
+4. **Always cite your sources** using the format [Source: filename, page X] where X is the page number.
+5. If a document doesn't specify a page, use [Source: filename].
+6. If multiple sources support the same information, list them all: [Source: doc1.pdf, page 1; doc2.pdf, page 3]
+7. If the context doesn't contain relevant information, say "I don't have enough information to answer this question."
 
-Context:
+## Context:
 {context}
 
-Question: {question}
+## Question: {question}
 
-Answer:
+## Answer:
 """
         )
 
@@ -58,7 +62,12 @@ Answer:
             )
             self.chain = (
                 runnable_map
-                | (lambda x: {"context": self._format_docs(x["context"]), "question": x["question"]})
+                | (lambda x: {
+                    "context": self._format_docs(x["context"]), 
+                    "question": x["question"],
+                    "sources": [doc.metadata for doc in x["context"]] if hasattr(x["context"][0], "metadata") 
+                              else [doc.get("metadata", {}) for doc in x["context"]]
+                })
                 | self.prompt
                 | self.llm
                 | StrOutputParser()
@@ -69,25 +78,38 @@ Answer:
 
     def _format_docs(self, docs):
         """
-        Format retrieved documents (now dicts) into a single context string.
+        Format retrieved documents (now dicts) into a single context string with source metadata.
 
         Args:
             docs: List[dict] each with keys "page_content" & "metadata"
 
         Returns:
-            A formatted string of all document texts.
+            A formatted string of all document texts with source information.
         """
         if not docs:
             return "No relevant information found."
 
         formatted = []
         for i, doc in enumerate(docs):
-            # support both dicts and objects with .page_content
+            # Extract content and metadata
             if hasattr(doc, "page_content"):
                 text = doc.page_content
+                metadata = getattr(doc, "metadata", {})
             else:
                 text = doc.get("page_content", "")
-            formatted.append(f"Document {i+1}:\n{text}")
+                metadata = doc.get("metadata", {})
+            
+            # Get source information
+            source = metadata.get('source', 'Unknown source')
+            page = metadata.get('page', 'N/A')
+            
+            # Format with source information
+            source_info = f"[Source: {source}"
+            if page != 'N/A':
+                source_info += f", page {page}"
+            source_info += "]"
+            
+            formatted.append(f"Document {i+1} ({source_info}):\n{text}")
 
         return "\n\n".join(formatted)
 

@@ -7,6 +7,11 @@ import platform
 import traceback
 import logging
 import json
+import plotly.express as px
+from utils.metrics import metrics_collector, QueryStatus
+from pathlib import Path
+from datetime import datetime
+import time
 
 import streamlit as st
 
@@ -30,8 +35,87 @@ from config.settings import DEFAULT_PERSIST_DIRECTORY, DEFAULT_DESCRIPTIONS_FILE
 
 logger = setup_logging()
 
-st.set_page_config(page_title="🔗 RAG Chatbot", layout="wide")
+# Set page config
+st.set_page_config(
+    page_title="🔗 RAG Chatbot",
+    layout="wide",
+    page_icon="🔍"
+)
 
+# Page navigation
+PAGES = {
+    "Chat": "chat",
+    "Observability Dashboard": "dashboard"
+}
+
+def show_dashboard():
+    """Display the observability dashboard."""
+    st.title("🔍 RAG System Observability")
+    
+    # Get metrics data
+    df = metrics_collector.get_metrics_dataframe()
+    
+    if df.empty:
+        st.info("No query metrics available yet. Use the chat to generate some data.")
+        return
+    
+    # Summary stats
+    st.header("📊 Summary Statistics")
+    stats = metrics_collector.get_summary_stats()
+    
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Total Queries", stats['total_queries'])
+    with col2:
+        st.metric("Success Rate", f"{stats['success_rate']*100:.1f}%")
+    with col3:
+        st.metric("Avg Latency", f"{stats['avg_latency']:.2f}s")
+    with col4:
+        st.metric("Total Tokens Used", f"{stats['total_tokens_used']:,}")
+    
+    # Token usage over time
+    st.header("📈 Token Usage Over Time")
+    if len(df) > 1:
+        fig = px.line(df, x='timestamp', y=['input_tokens', 'output_tokens', 'total_tokens'],
+                     title="Token Usage Over Time",
+                     labels={'value': 'Tokens', 'variable': 'Token Type'})
+        st.plotly_chart(fig, use_container_width=True)
+    
+    # Latency distribution
+    st.header("⏱️ Latency Distribution")
+    if len(df) > 1:
+        fig = px.histogram(df, x='latency_seconds', nbins=20,
+                         title="Query Latency Distribution",
+                         labels={'latency_seconds': 'Latency (seconds)'})
+        st.plotly_chart(fig, use_container_width=True)
+    
+    # Most recent queries
+    st.header("📝 Recent Queries")
+    st.dataframe(df[['timestamp', 'query', 'status', 'latency_seconds', 'total_tokens']]
+                 .sort_values('timestamp', ascending=False)
+                 .head(10),
+                 use_container_width=True)
+    
+    # Chunk sources
+    st.header("📚 Top Document Sources")
+    if not df.empty and 'chunk_sources' in df.columns and not df['chunk_sources'].isna().all():
+        sources = df.explode('chunk_sources')['chunk_sources'].value_counts().reset_index()
+        sources.columns = ['Source', 'Count']
+        if not sources.empty:
+            fig = px.bar(sources.head(10), x='Source', y='Count',
+                        title="Most Used Document Sources")
+            st.plotly_chart(fig, use_container_width=True)
+    
+    # Raw data export
+    st.header("📥 Export Data")
+    if st.button("Export Metrics to CSV"):
+        csv = df.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label="Download CSV",
+            data=csv,
+            file_name=f"rag_metrics_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+            mime='text/csv',
+        )
 
 def is_ollama_running() -> bool:
     try:
@@ -103,12 +187,15 @@ def init_rag(force_rebuild: bool):
             info.text("6/6 Chunking & indexing documents")
             progress.progress(70)
 
-            docs1 = load_documents(d1_dir)
+            # Pass enable_ocr to load_documents
+            enable_ocr = st.session_state.get("enable_ocr", False)
+            
+            docs1 = load_documents(d1_dir, enable_ocr=enable_ocr)
             if docs1:
                 chunks1 = chunker.chunk_documents(docs1)
                 vdb.add_documents_to_index("domain1", chunks1)
 
-            docs2 = load_documents(d2_dir)
+            docs2 = load_documents(d2_dir, enable_ocr=enable_ocr)
             if docs2:
                 chunks2 = chunker.chunk_documents(docs2)
                 vdb.add_documents_to_index("domain2", chunks2)
@@ -139,9 +226,10 @@ def init_rag(force_rebuild: bool):
         return False
 
 
-def main():
+def chat_page():
+    """Main chat interface."""
     st.title("🔗 RAG Chatbot Configuration & Chat")
-
+    
     # --- Initialize session state for settings if they aren't already set ---
     # This section runs on every script rerun, but conditions like 
     # `if "key" not in st.session_state:` ensure initialization happens once.
@@ -182,6 +270,8 @@ def main():
         st.session_state.persist_dir = DEFAULT_PERSIST_DIRECTORY
     if "model_name" not in st.session_state:
         st.session_state.model_name = DEFAULT_LLM_MODEL
+    if "enable_ocr" not in st.session_state:
+        st.session_state.enable_ocr = False
     
     # Initialize chatbot in session_state if not present
     if "chatbot" not in st.session_state:
@@ -200,6 +290,10 @@ def main():
 
         st.text_input("Chroma persist directory", key="persist_dir")
         st.text_input("Index descriptions file", key="descriptions_file")
+        
+        # Add OCR toggle
+        st.checkbox("Enable OCR for PDF images", key="enable_ocr", value=False,
+                  help="Enable OCR to extract text from images in PDFs (slower but more accurate for scanned documents)")
         
         current_model_in_state = st.session_state.model_name
         if current_model_in_state not in AVAILABLE_LLM_MODELS:
@@ -267,11 +361,88 @@ def main():
                     full_response = "RAG system is not initialized. Please use the 'Initialize/Rebuild RAG System' button in the sidebar."
                 st.warning(full_response)
             else:
-                with st.spinner("Thinking..."):
-                    full_response = st.session_state.chatbot.chat(prompt)
-            message_placeholder.markdown(full_response)
+                # Start tracking the query
+                query_id = metrics_collector.start_query(
+                    query=prompt,
+                    model=st.session_state.model_name,
+                    rag_initialized='chatbot' in st.session_state
+                )
+                
+                try:
+                    with st.spinner("Thinking..."):
+                        # Get the response from the chatbot
+                        start_time = time.time()
+                        response = st.session_state.chatbot.chat(prompt)
+                        processing_time = time.time() - start_time
+                        
+                        # Get retrieved chunks if available
+                        retrieved_chunks = []
+                        chunk_scores = []
+                        if hasattr(st.session_state.chatbot.rag_chain.retriever, 'last_retrieved_docs'):
+                            retrieved_chunks = [
+                                {'page_content': doc['page_content'], 'metadata': doc.get('metadata', {})}
+                                for doc in st.session_state.chatbot.rag_chain.retriever.last_retrieved_docs
+                                if isinstance(doc, dict) and 'page_content' in doc
+                            ]
+                            chunk_scores = getattr(st.session_state.chatbot.rag_chain.retriever, 'last_scores', [])
+                        
+                        # Complete the query tracking
+                        metrics_collector.complete_query(
+                            query_id=query_id,
+                            response=response,
+                            status=QueryStatus.SUCCESS,
+                            retrieved_chunks=retrieved_chunks,
+                            chunk_scores=chunk_scores,
+                            processing_time_seconds=processing_time
+                        )
+                        
+                        # Display the response
+                        full_response = response
+                        message_placeholder.markdown(full_response)
+                        
+                except Exception as e:
+                    # Log the error
+                    error_msg = str(e)
+                    logger.error(f"Error in chat: {error_msg}", exc_info=True)
+                    
+                    # Update metrics with error
+                    metrics_collector.complete_query(
+                        query_id=query_id,
+                        response="",
+                        status="error",
+                        error_message=error_msg
+                    )
+                    
+                    # Show error to user
+                    full_response = f"An error occurred: {error_msg}"
+                    message_placeholder.error(full_response)
+        
+        # Add assistant response to chat history
         st.session_state.messages.append({"role": "assistant", "content": full_response})
 
+
+def main():
+    # Sidebar navigation
+    st.sidebar.title("Navigation")
+    selection = st.sidebar.radio("Go to", list(PAGES.keys()))
+    
+    # Initialize session state for metrics if not exists
+    if 'metrics_initialized' not in st.session_state:
+        metrics_file = Path("metrics.json")
+        if metrics_file.exists():
+            metrics_collector.load_from_file(metrics_file)
+        st.session_state.metrics_initialized = True
+    
+    # Save metrics periodically
+    if len(metrics_collector.queries) > 0:
+        metrics_file = Path("metrics.json")
+        metrics_collector.save_to_file(metrics_file)
+    
+    # Show the selected page
+    if PAGES[selection] == "dashboard":
+        show_dashboard()
+    else:
+        chat_page()
 
 if __name__ == "__main__":
     main()
